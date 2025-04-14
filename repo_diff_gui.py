@@ -114,9 +114,9 @@ class RepoComparisonTool:
         direction_frame = ttk.LabelFrame(main_frame, text="Comparison Direction", padding="10")
         direction_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Radiobutton(direction_frame, text="Repo1 → Repo2 (files in Repo1 not in Repo2)", 
+        ttk.Radiobutton(direction_frame, text="Repo1 \u2192 Repo2 (files in Repo1 not in Repo2)", 
                         variable=self.comparison_direction, value="1to2").pack(anchor=tk.W, pady=2)
-        ttk.Radiobutton(direction_frame, text="Repo2 → Repo1 (files in Repo2 not in Repo1)", 
+        ttk.Radiobutton(direction_frame, text="Repo2 \u2192 Repo1 (files in Repo2 not in Repo1)", 
                         variable=self.comparison_direction, value="2to1").pack(anchor=tk.W, pady=2)
         ttk.Radiobutton(direction_frame, text="Both directions (all differences)", 
                         variable=self.comparison_direction, value="both").pack(anchor=tk.W, pady=2)
@@ -168,6 +168,9 @@ class RepoComparisonTool:
                 return False
         else:
             # Local repository, just use it directly
+            if not os.path.exists(os.path.join(repo_path, '.git')):
+                messagebox.showerror("Error", f"The path '{repo_path}' is not a valid Git repository.")
+                return False
             return True
     
     def get_repo_dir(self, repo_path):
@@ -179,6 +182,13 @@ class RepoComparisonTool:
                     return None
             return repo_dir
         else:
+            # Validate local repository
+            if not os.path.exists(repo_path):
+                messagebox.showerror("Error", f"The path '{repo_path}' does not exist.")
+                return None
+            if not os.path.exists(os.path.join(repo_path, '.git')):
+                messagebox.showerror("Error", f"The path '{repo_path}' is not a valid Git repository.")
+                return None
             return repo_path
     
     def fetch_tags(self):
@@ -392,6 +402,12 @@ class RepoComparisonTool:
         temp_repo1 = os.path.join(self.temp_dir, "temp_repo1")
         temp_repo2 = os.path.join(self.temp_dir, "temp_repo2")
         
+        # Clean up any existing temp directories
+        if os.path.exists(temp_repo1):
+            shutil.rmtree(temp_repo1, ignore_errors=True)
+        if os.path.exists(temp_repo2):
+            shutil.rmtree(temp_repo2, ignore_errors=True)
+            
         os.makedirs(temp_repo1, exist_ok=True)
         os.makedirs(temp_repo2, exist_ok=True)
         
@@ -399,17 +415,32 @@ class RepoComparisonTool:
         self.update_status("Preparing repositories...")
         
         try:
-            # Clone repo1 with selected tag/branch
-            subprocess.run(['git', 'clone', repo1_dir, temp_repo1], 
-                          check=True, capture_output=True, text=True)
-            subprocess.run(['git', '-C', temp_repo1, 'checkout', self.repo1_selected_tag.get()], 
-                          check=True, capture_output=True, text=True)
+            # For URL repositories, we need to clone them
+            if self.is_url(self.repo1_path.get().strip()):
+                # Clone repo1 with selected tag/branch
+                subprocess.run(['git', 'clone', self.repo1_path.get().strip(), temp_repo1], 
+                              check=True, capture_output=True, text=True)
+                subprocess.run(['git', '-C', temp_repo1, 'checkout', self.repo1_selected_tag.get()], 
+                              check=True, capture_output=True, text=True)
+            else:
+                # For local repositories, create a copy
+                self.copy_git_repo(repo1_dir, temp_repo1)
+                subprocess.run(['git', '-C', temp_repo1, 'checkout', self.repo1_selected_tag.get()], 
+                              check=True, capture_output=True, text=True)
             
-            # Clone repo2 with selected tag/branch
-            subprocess.run(['git', 'clone', repo2_dir, temp_repo2], 
-                          check=True, capture_output=True, text=True)
-            subprocess.run(['git', '-C', temp_repo2, 'checkout', self.repo2_selected_tag.get()], 
-                          check=True, capture_output=True, text=True)
+            # Same for repo2
+            if self.is_url(self.repo2_path.get().strip()):
+                # Clone repo2 with selected tag/branch
+                subprocess.run(['git', 'clone', self.repo2_path.get().strip(), temp_repo2], 
+                              check=True, capture_output=True, text=True)
+                subprocess.run(['git', '-C', temp_repo2, 'checkout', self.repo2_selected_tag.get()], 
+                              check=True, capture_output=True, text=True)
+            else:
+                # For local repositories, create a copy
+                self.copy_git_repo(repo2_dir, temp_repo2)
+                subprocess.run(['git', '-C', temp_repo2, 'checkout', self.repo2_selected_tag.get()], 
+                              check=True, capture_output=True, text=True)
+                
         except subprocess.CalledProcessError as e:
             messagebox.showerror("Error", f"Failed to prepare repositories: {e.stderr}")
             self.update_status("Failed to generate difference")
@@ -436,6 +467,24 @@ class RepoComparisonTool:
         # Open output directory
         self.update_status("Difference generated successfully")
         os.startfile(output_dir)
+    
+    def copy_git_repo(self, source_repo, target_dir):
+        """Create a copy of a git repository for comparison"""
+        # Initialize a new git repository in the target directory
+        subprocess.run(['git', 'init', target_dir], 
+                      check=True, capture_output=True, text=True)
+        
+        # Add the source repository as a remote
+        subprocess.run(['git', '-C', target_dir, 'remote', 'add', 'origin', source_repo], 
+                      check=True, capture_output=True, text=True)
+        
+        # Fetch all branches and tags
+        subprocess.run(['git', '-C', target_dir, 'fetch', '--all'], 
+                      check=True, capture_output=True, text=True)
+        
+        # Fetch all tags
+        subprocess.run(['git', '-C', target_dir, 'fetch', '--tags'], 
+                      check=True, capture_output=True, text=True)
     
     def find_unique_files(self, source_repo, target_repo, output_dir):
         # Get list of files in source repo
