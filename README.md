@@ -10,6 +10,10 @@ A GUI tool for comparing two Git repositories and finding differences between th
 - Generate a directory with all unique files from each repository
 - Support for both local and remote repositories
 - Proper validation of repository paths and URLs
+- Detailed logging for troubleshooting
+- Improved branch/tag detection and selection
+- Better error handling and user feedback
+- Automatic detection of default branches
 
 ## Usage
 
@@ -34,9 +38,13 @@ You can test the tool with sample repositories by running `test_repo_diff.bat`, 
 
 ## Recent Improvements
 
-- Added proper validation for local repository paths
-- Fixed issues with head/main branch validation
-- Improved handling of local repositories
-- Added better error messages for invalid repositories
-- Fixed issues with temporary directory cleanup
-- Improved the repository cloning process for both local and remote repositories
+- Added comprehensive logging for better troubleshooting
+- Improved repository validation for both local and remote repositories
+- Enhanced branch/tag detection with better sorting and filtering
+- Fixed issues with head/main branch validation and detection
+- Added more robust error handling for Git operations
+- Improved handling of repository cloning and checkout
+- Added fallback mechanisms when branch checkout fails
+- Enhanced user feedback with more detailed status messages
+- Added a summary file with comparison details
+- Fixed issues with file copying and error handling
