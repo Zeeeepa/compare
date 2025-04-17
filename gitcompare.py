@@ -47,14 +47,15 @@ class GitHubCompare:
         # Create tabs
         self.local_tab = ttk.Frame(self.notebook)
         self.origin_tab = ttk.Frame(self.notebook)
+        self.commit_list_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.local_tab, text="Local Compare")
         self.notebook.add(self.origin_tab, text="Origin Compare")
+        self.notebook.add(self.commit_list_tab, text="Commit List")
         
-        # Setup local compare tab
+        # Setup tabs
         self.setup_local_tab()
-        
-        # Setup origin compare tab
         self.setup_origin_tab()
+        self.setup_commit_list_tab()
         
         # Add settings button and refresh button
         button_frame = ttk.Frame(self.main_frame)
@@ -306,6 +307,7 @@ class GitHubCompare:
                         # Cache is valid, update UI
                         self.repo_combo['values'] = self.cache['repos']
                         self.origin_repo_combo['values'] = self.cache['repos']
+                        self.commit_list_repo_combo['values'] = self.cache['repos']  # Add this line
                         self.status_var.set("Data loaded from cache")
                         return True
         except Exception as e:
@@ -347,7 +349,9 @@ class GitHubCompare:
                 self.root.after(0, lambda: self.stop_progress(success_message))
                 return result
             except Exception as e:
-                self.root.after(0, lambda: self.handle_error(e))
+                error_message = str(e)  # Capture the error message
+                self.root.after(0, lambda error_msg=error_message: 
+                            self.handle_error(Exception(error_msg)))
                 return None
                 
         thread = threading.Thread(target=thread_func)
@@ -398,6 +402,7 @@ class GitHubCompare:
         """Update repository dropdowns with fetched data"""
         self.repo_combo['values'] = repos
         self.origin_repo_combo['values'] = repos
+        self.commit_list_repo_combo['values'] = repos
     
     def filter_repos(self, *args):
         """Filter repositories based on search term"""
@@ -761,7 +766,7 @@ class GitHubCompare:
             msg_frame.pack(fill=tk.X, pady=5)
             
             commit_msg = ttk.Label(msg_frame, text=commit.commit.message.split('\n')[0],
-                                  wraplength=800, anchor=tk.W)
+                                wraplength=800, anchor=tk.W)
             commit_msg.pack(side=tk.LEFT, padx=5)
             
             # Author and date
@@ -776,11 +781,22 @@ class GitHubCompare:
             
             # Stats (if available)
             if hasattr(commit, 'stats') and commit.stats:
-                stats_text = f"{commit.stats.total} changes: "
-                stats_text += f"+{commit.stats.additions}, -{commit.stats.deletions}"
-                
-                stats_label = ttk.Label(info_frame, text=stats_text)
-                stats_label.pack(side=tk.RIGHT, padx=5)
+                # Get number of files changed - we need to fetch the detailed commit to get this info
+                try:
+                    detailed_commit = self.g.get_repo(commit.repository.full_name).get_commit(commit.sha)
+                    num_files = len(detailed_commit.files)
+                    stats_text = f"{num_files} file{'s' if num_files != 1 else ''} changed: "
+                    stats_text += f"+{commit.stats.additions}, -{commit.stats.deletions}"
+                    
+                    stats_label = ttk.Label(info_frame, text=stats_text)
+                    stats_label.pack(side=tk.RIGHT, padx=5)
+                except Exception:
+                    # Fall back to just showing additions/deletions if we can't get file count
+                    stats_text = f"{commit.stats.total} changes: "
+                    stats_text += f"+{commit.stats.additions}, -{commit.stats.deletions}"
+                    
+                    stats_label = ttk.Label(info_frame, text=stats_text)
+                    stats_label.pack(side=tk.RIGHT, padx=5)
             
             # Action buttons
             btn_frame = ttk.Frame(commit_frame)
@@ -1050,6 +1066,543 @@ class GitHubCompare:
         
         # Initial focus
         title_entry.focus_set()
+
+
+
+
+
+    def setup_commit_list_tab(self):
+        # Create frames for organization
+        top_frame = ttk.Frame(self.commit_list_tab)
+        top_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Repository selection
+        repo_frame = ttk.LabelFrame(top_frame, text="Repository Selection")
+        repo_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(repo_frame, text="Repository:").pack(side=tk.LEFT, padx=5)
+        self.commit_list_repo_var = tk.StringVar()
+        self.commit_list_repo_combo = ttk.Combobox(repo_frame, textvariable=self.commit_list_repo_var, width=50)
+        self.commit_list_repo_combo.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        self.commit_list_repo_combo.bind('<<ComboboxSelected>>', self.update_commit_list_branches)
+        
+        # Branch selection
+        branch_frame = ttk.LabelFrame(top_frame, text="Branch Selection")
+        branch_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(branch_frame, text="Branch:").pack(side=tk.LEFT, padx=5)
+        self.commit_list_branch_var = tk.StringVar()
+        self.commit_list_branch_combo = ttk.Combobox(branch_frame, textvariable=self.commit_list_branch_var, width=30)
+        self.commit_list_branch_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Action buttons
+        action_frame = ttk.Frame(top_frame)
+        action_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        fetch_btn = ttk.Button(action_frame, text="Fetch Commits", command=self.fetch_commit_list)
+        fetch_btn.pack(side=tk.LEFT, padx=5)
+        
+        remove_btn = ttk.Button(action_frame, text="Remove Selected Commits", command=self.remove_selected_commits)
+        remove_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Number of commits to show
+        limit_frame = ttk.Frame(action_frame)
+        limit_frame.pack(side=tk.LEFT, padx=15)
+        
+        ttk.Label(limit_frame, text="Show last:").pack(side=tk.LEFT, padx=5)
+        self.commit_limit_var = tk.StringVar(value="20")
+        limit_entry = ttk.Combobox(limit_frame, textvariable=self.commit_limit_var, width=5, 
+                                values=["10", "20", "50", "100"])
+        limit_entry.pack(side=tk.LEFT, padx=5)
+        ttk.Label(limit_frame, text="commits").pack(side=tk.LEFT)
+        
+        # Results frame with commits list
+        results_frame = ttk.LabelFrame(self.commit_list_tab, text="Commit List")
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create a frame for the commits with a scrollbar
+        commits_frame = ttk.Frame(results_frame)
+        commits_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create canvas and scrollbar for scrolling
+        self.commit_list_canvas = tk.Canvas(commits_frame)
+        scrollbar = ttk.Scrollbar(commits_frame, orient=tk.VERTICAL, command=self.commit_list_canvas.yview)
+        self.commit_list_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.commit_list_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Frame inside canvas for commits
+        self.commit_list_frame = ttk.Frame(self.commit_list_canvas)
+        self.commit_list_canvas_window = self.commit_list_canvas.create_window((0, 0), window=self.commit_list_frame, anchor=tk.NW)
+        
+        # Configure scrolling
+        self.commit_list_frame.bind("<Configure>", lambda e: self.commit_list_canvas.configure(scrollregion=self.commit_list_canvas.bbox("all")))
+        self.commit_list_canvas.bind("<Configure>", self.on_commit_list_canvas_configure)
+        
+        # Bind mousewheel scrolling
+        self.commit_list_canvas.bind_all("<MouseWheel>", lambda event: self.commit_list_canvas.yview_scroll(int(-1*(event.delta/120)), "units"))
+        
+        # Status message
+        self.commit_list_status_var = tk.StringVar(value="Select a repository and branch to view commits")
+        status_label = ttk.Label(results_frame, textvariable=self.commit_list_status_var)
+        status_label.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+
+    def on_commit_list_canvas_configure(self, event):
+        # Update the width of the canvas window when the canvas size changes
+        self.commit_list_canvas.itemconfig(self.commit_list_canvas_window, width=event.width)
+
+    def update_commit_list_branches(self, event=None):
+        """Update branch list when repository is selected in commit list tab"""
+        repo_name = self.commit_list_repo_var.get()
+        if not repo_name:
+            return
+            
+        def fetch_branches():
+            try:
+                # Check if branches are cached
+                if repo_name in self.cache['branches']:
+                    branches = self.cache['branches'][repo_name]
+                else:
+                    repo = self.g.get_repo(repo_name)
+                    branches = [branch.name for branch in repo.get_branches()]
+                    self.cache['branches'][repo_name] = branches
+                    self.save_cache()
+                
+                # Update UI in main thread
+                self.root.after(0, lambda: self.update_commit_list_branch_dropdown(branches, repo_name))
+                
+            except Exception as e:
+                raise Exception(f"Failed to fetch branches: {str(e)}")
+        
+        # Run in background thread
+        self.run_in_thread(fetch_branches, message=f"Fetching branches for {repo_name}...", 
+                        success_message=f"Branches updated for {repo_name}")
+
+    def update_commit_list_branch_dropdown(self, branches, repo_name):
+        """Update branch dropdown in commit list tab"""
+        self.commit_list_branch_combo['values'] = branches
+        
+        # Try to set to develop branch if exists, otherwise default branch
+        if 'develop' in branches:
+            self.commit_list_branch_var.set('develop')
+        else:
+            try:
+                default_branch = self.g.get_repo(repo_name).default_branch
+                self.commit_list_branch_var.set(default_branch)
+            except:
+                if branches:
+                    self.commit_list_branch_var.set(branches[0])
+
+    def display_commit_list(self, commits, repo_name, branch_name):
+        """Display commits with checkboxes in the commit list tab"""
+        # Clear previous results
+        for widget in self.commit_list_frame.winfo_children():
+            widget.destroy()
+            
+        if not commits:
+            self.commit_list_status_var.set(f"No commits found in {repo_name}/{branch_name}")
+            return
+            
+        self.commit_list_status_var.set(f"Showing {len(commits)} commits from {repo_name}/{branch_name}")
+        
+        # Store checkboxes for later access
+        self.commit_checkboxes = {}
+        
+        # Create header
+        header_frame = ttk.Frame(self.commit_list_frame)
+        header_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Select all checkbox
+        self.select_all_var = tk.BooleanVar(value=False)
+        select_all_cb = ttk.Checkbutton(header_frame, variable=self.select_all_var, command=self.toggle_all_commits)
+        select_all_cb.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(header_frame, text="Select All", font=("", 10, "bold")).pack(side=tk.LEFT)
+        
+        # Add separators for header
+        separator = ttk.Separator(self.commit_list_frame, orient=tk.HORIZONTAL)
+        separator.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Create a frame for each commit
+        for i, commit in enumerate(commits):
+            commit_frame = ttk.Frame(self.commit_list_frame)
+            commit_frame.pack(fill=tk.X, padx=5, pady=5, anchor=tk.N)
+            
+            # Checkbox for selection
+            var = tk.BooleanVar(value=False)
+            checkbox = ttk.Checkbutton(commit_frame, variable=var)
+            checkbox.pack(side=tk.LEFT, padx=5)
+            
+            # Store the checkbox variable
+            self.commit_checkboxes[commit.sha] = var
+            
+            # Commit number and hash
+            commit_num = ttk.Label(commit_frame, text=f"#{i+1}", font=("", 10, "bold"))
+            commit_num.pack(side=tk.LEFT, padx=5)
+            
+            commit_hash = ttk.Label(commit_frame, text=commit.sha[:7])
+            commit_hash.pack(side=tk.LEFT, padx=5)
+            
+            # Commit message
+            msg_text = commit.commit.message.split('\n')[0]
+            commit_msg = ttk.Label(commit_frame, text=msg_text, wraplength=800, anchor=tk.W)
+            commit_msg.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+            
+            # Author and date
+            author = commit.commit.author.name
+            date = commit.commit.author.date.strftime("%Y-%m-%d %H:%M:%S")
+            
+            info_frame = ttk.Frame(commit_frame)
+            info_frame.pack(side=tk.RIGHT)
+            
+            author_label = ttk.Label(info_frame, text=f"{author} on {date}")
+            author_label.pack(side=tk.RIGHT, padx=5)
+            
+            # Add separator after each commit
+            if i < len(commits) - 1:
+                separator = ttk.Separator(self.commit_list_frame, orient=tk.HORIZONTAL)
+                separator.pack(fill=tk.X, padx=5, pady=5)
+
+
+    def setup_commit_list_tab(self):
+        # Create frames for organization
+        top_frame = ttk.Frame(self.commit_list_tab)
+        top_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Repository selection
+        repo_frame = ttk.LabelFrame(top_frame, text="Repository Selection")
+        repo_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(repo_frame, text="Repository:").pack(side=tk.LEFT, padx=5)
+        self.commit_list_repo_var = tk.StringVar()
+        self.commit_list_repo_combo = ttk.Combobox(repo_frame, textvariable=self.commit_list_repo_var, width=50)
+        self.commit_list_repo_combo.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        self.commit_list_repo_combo.bind('<<ComboboxSelected>>', self.update_commit_list_branches)
+        
+        # Branch selection
+        branch_frame = ttk.LabelFrame(top_frame, text="Branch Selection")
+        branch_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(branch_frame, text="Branch:").pack(side=tk.LEFT, padx=5)
+        self.commit_list_branch_var = tk.StringVar()
+        self.commit_list_branch_combo = ttk.Combobox(branch_frame, textvariable=self.commit_list_branch_var, width=30)
+        self.commit_list_branch_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Action buttons
+        action_frame = ttk.Frame(top_frame)
+        action_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        fetch_btn = ttk.Button(action_frame, text="Fetch Commits", command=self.fetch_commit_list)
+        fetch_btn.pack(side=tk.LEFT, padx=5)
+        
+        remove_btn = ttk.Button(action_frame, text="Remove Selected Commits", command=self.remove_selected_commits)
+        remove_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Number of commits to show
+        limit_frame = ttk.Frame(action_frame)
+        limit_frame.pack(side=tk.LEFT, padx=15)
+        
+        ttk.Label(limit_frame, text="Show last:").pack(side=tk.LEFT, padx=5)
+        self.commit_limit_var = tk.StringVar(value="20")
+        limit_entry = ttk.Combobox(limit_frame, textvariable=self.commit_limit_var, width=5, 
+                                values=["10", "20", "50", "100"])
+        limit_entry.pack(side=tk.LEFT, padx=5)
+        ttk.Label(limit_frame, text="commits").pack(side=tk.LEFT)
+        
+        # Results frame with commits list
+        results_frame = ttk.LabelFrame(self.commit_list_tab, text="Commit List")
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create a frame for the commits with a scrollbar
+        commits_frame = ttk.Frame(results_frame)
+        commits_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create canvas and scrollbar for scrolling
+        self.commit_list_canvas = tk.Canvas(commits_frame)
+        scrollbar = ttk.Scrollbar(commits_frame, orient=tk.VERTICAL, command=self.commit_list_canvas.yview)
+        self.commit_list_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.commit_list_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Frame inside canvas for commits
+        self.commit_list_frame = ttk.Frame(self.commit_list_canvas)
+        self.commit_list_canvas_window = self.commit_list_canvas.create_window((0, 0), window=self.commit_list_frame, anchor=tk.NW)
+        
+        # Configure scrolling
+        self.commit_list_frame.bind("<Configure>", lambda e: self.commit_list_canvas.configure(scrollregion=self.commit_list_canvas.bbox("all")))
+        self.commit_list_canvas.bind("<Configure>", self.on_commit_list_canvas_configure)
+        
+        # Bind mousewheel scrolling
+        self.commit_list_canvas.bind_all("<MouseWheel>", lambda event: self.commit_list_canvas.yview_scroll(int(-1*(event.delta/120)), "units"))
+        
+        # Status message
+        self.commit_list_status_var = tk.StringVar(value="Select a repository and branch to view commits")
+        status_label = ttk.Label(results_frame, textvariable=self.commit_list_status_var)
+        status_label.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+
+    def on_commit_list_canvas_configure(self, event):
+        # Update the width of the canvas window when the canvas size changes
+        self.commit_list_canvas.itemconfig(self.commit_list_canvas_window, width=event.width)
+
+    def update_commit_list_branches(self, event=None):
+        """Update branch list when repository is selected in commit list tab"""
+        repo_name = self.commit_list_repo_var.get()
+        if not repo_name:
+            return
+            
+        def fetch_branches():
+            try:
+                # Check if branches are cached
+                if repo_name in self.cache['branches']:
+                    branches = self.cache['branches'][repo_name]
+                else:
+                    repo = self.g.get_repo(repo_name)
+                    branches = [branch.name for branch in repo.get_branches()]
+                    self.cache['branches'][repo_name] = branches
+                    self.save_cache()
+                
+                # Update UI in main thread
+                self.root.after(0, lambda: self.update_commit_list_branch_dropdown(branches, repo_name))
+                
+            except Exception as e:
+                raise Exception(f"Failed to fetch branches: {str(e)}")
+        
+        # Run in background thread
+        self.run_in_thread(fetch_branches, message=f"Fetching branches for {repo_name}...", 
+                        success_message=f"Branches updated for {repo_name}")
+
+    def update_commit_list_branch_dropdown(self, branches, repo_name):
+        """Update branch dropdown in commit list tab"""
+        self.commit_list_branch_combo['values'] = branches
+        
+        # Try to set to develop branch if exists, otherwise default branch
+        if 'develop' in branches:
+            self.commit_list_branch_var.set('develop')
+        else:
+            try:
+                default_branch = self.g.get_repo(repo_name).default_branch
+                self.commit_list_branch_var.set(default_branch)
+            except:
+                if branches:
+                    self.commit_list_branch_var.set(branches[0])
+
+    def fetch_commit_list(self):
+        """Fetch commit list from the selected branch"""
+        repo_name = self.commit_list_repo_var.get()
+        branch_name = self.commit_list_branch_var.get()
+        
+        if not repo_name or not branch_name:
+            messagebox.showerror("Error", "Please select a repository and branch")
+            return
+            
+        try:
+            limit = int(self.commit_limit_var.get())
+        except ValueError:
+            limit = 20  # Default value
+        
+        def fetch_commits():
+            try:
+                repo = self.g.get_repo(repo_name)
+                branch = repo.get_branch(branch_name)
+                
+                # Get commits from the branch
+                commits = []
+                for commit in repo.get_commits(sha=branch.commit.sha):
+                    commits.append(commit)
+                    if len(commits) >= limit:
+                        break
+                
+                # Store commits for later use
+                self.commit_list_commits = commits
+                
+                # Update UI in main thread
+                self.root.after(0, lambda: self.display_commit_list(commits, repo_name, branch_name))
+                
+            except Exception as e:
+                raise Exception(f"Failed to fetch commits: {str(e)}")
+        
+        # Run in background thread
+        self.run_in_thread(fetch_commits, 
+                        message=f"Fetching commits from {branch_name}...", 
+                        success_message=f"Fetched commits from {branch_name}")
+
+    def display_commit_list(self, commits, repo_name, branch_name):
+        """Display commits with checkboxes in the commit list tab"""
+        # Clear previous results
+        for widget in self.commit_list_frame.winfo_children():
+            widget.destroy()
+            
+        if not commits:
+            self.commit_list_status_var.set(f"No commits found in {repo_name}/{branch_name}")
+            return
+            
+        self.commit_list_status_var.set(f"Showing {len(commits)} commits from {repo_name}/{branch_name}")
+        
+        # Store checkboxes for later access
+        self.commit_checkboxes = {}
+        
+        # Create header
+        header_frame = ttk.Frame(self.commit_list_frame)
+        header_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Select all checkbox
+        self.select_all_var = tk.BooleanVar(value=False)
+        select_all_cb = ttk.Checkbutton(header_frame, variable=self.select_all_var, command=self.toggle_all_commits)
+        select_all_cb.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(header_frame, text="Select All", font=("", 10, "bold")).pack(side=tk.LEFT)
+        
+        # Add separators for header
+        separator = ttk.Separator(self.commit_list_frame, orient=tk.HORIZONTAL)
+        separator.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Create a frame for each commit
+        for i, commit in enumerate(commits):
+            commit_frame = ttk.Frame(self.commit_list_frame)
+            commit_frame.pack(fill=tk.X, padx=5, pady=5, anchor=tk.N)
+            
+            # Checkbox for selection
+            var = tk.BooleanVar(value=False)
+            checkbox = ttk.Checkbutton(commit_frame, variable=var)
+            checkbox.pack(side=tk.LEFT, padx=5)
+            
+            # Store the checkbox variable
+            self.commit_checkboxes[commit.sha] = var
+            
+            # Commit number and hash
+            commit_num = ttk.Label(commit_frame, text=f"#{i+1}", font=("", 10, "bold"))
+            commit_num.pack(side=tk.LEFT, padx=5)
+            
+            commit_hash = ttk.Label(commit_frame, text=commit.sha[:7])
+            commit_hash.pack(side=tk.LEFT, padx=5)
+            
+            # Commit message
+            msg_text = commit.commit.message.split('\n')[0]
+            commit_msg = ttk.Label(commit_frame, text=msg_text, wraplength=800, anchor=tk.W)
+            commit_msg.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+            
+            # Author and date
+            author = commit.commit.author.name
+            date = commit.commit.author.date.strftime("%Y-%m-%d %H:%M:%S")
+            
+            info_frame = ttk.Frame(commit_frame)
+            info_frame.pack(side=tk.RIGHT)
+            
+            author_label = ttk.Label(info_frame, text=f"{author} on {date}")
+            author_label.pack(side=tk.RIGHT, padx=5)
+            
+            # Add separator after each commit
+            if i < len(commits) - 1:
+                separator = ttk.Separator(self.commit_list_frame, orient=tk.HORIZONTAL)
+                separator.pack(fill=tk.X, padx=5, pady=5)
+
+    def toggle_all_commits(self):
+        """Select or deselect all commits"""
+        select_all = self.select_all_var.get()
+        
+        for var in self.commit_checkboxes.values():
+            var.set(select_all)
+
+    def remove_selected_commits(self):
+        """Remove selected commits from the branch"""
+        repo_name = self.commit_list_repo_var.get()
+        branch_name = self.commit_list_branch_var.get()
+        
+        if not repo_name or not branch_name:
+            messagebox.showerror("Error", "Please select a repository and branch")
+            return
+            
+        # Get selected commits
+        selected_commits = [sha for sha, var in self.commit_checkboxes.items() if var.get()]
+        
+        if not selected_commits:
+            messagebox.showinfo("Information", "No commits selected for removal")
+            return
+        
+        # Confirmation dialog
+        response = messagebox.askyesno(
+            "Confirm Commit Removal", 
+            f"Are you sure you want to remove {len(selected_commits)} selected commits from {branch_name}?\n\n"
+            "This operation will rewrite the branch history and cannot be undone."
+        )
+        
+        if not response:
+            return
+        
+        def perform_removal():
+            try:
+                repo = self.g.get_repo(repo_name)
+                
+                # Get the current branch reference
+                branch_ref = repo.get_git_ref(f"heads/{branch_name}")
+                
+                # Create a temporary branch for the operation
+                temp_branch_name = f"temp-remove-commits-{int(datetime.datetime.now().timestamp())}"
+                temp_ref = repo.create_git_ref(f"refs/heads/{temp_branch_name}", branch_ref.object.sha)
+                
+                # Get all commits in chronological order
+                all_commits = list(repo.get_commits(sha=branch_name))
+                
+                # Filter out selected commits to remove
+                commit_to_keep = [c for c in all_commits if c.sha not in selected_commits]
+                
+                if not commit_to_keep:
+                    raise Exception("Cannot remove all commits from the branch")
+                    
+                # Find the oldest commit to keep
+                base_commit = commit_to_keep[-1]
+                
+                # Cherry-pick commits to the temporary branch
+                # First, hard reset to the base commit
+                temp_ref.edit(base_commit.sha, force=True)
+                
+                # Cherry-pick each commit to keep in reverse order (oldest to newest)
+                for commit in reversed(commit_to_keep[:-1]):  # Skip the base commit
+                    # Get the commit data
+                    commit_data = repo.get_git_commit(commit.sha)
+                    tree = commit_data.tree
+                    parents = [base_commit.sha]
+                    
+                    # Create a new commit with the same data
+                    new_commit = repo.create_git_commit(
+                        message=commit_data.message,
+                        tree=tree,
+                        parents=parents
+                    )
+                    
+                    # Update the temp branch reference
+                    temp_ref.edit(new_commit.sha, force=True)
+                    
+                    # Update the base commit for the next iteration
+                    base_commit = repo.get_git_commit(new_commit.sha)
+                
+                # Update the original branch to point to the new history
+                branch_ref.edit(temp_ref.object.sha, force=True)
+                
+                # Delete the temporary branch
+                temp_ref.delete()
+                
+                # Update UI in main thread
+                self.root.after(0, lambda: self.after_commit_removal(len(selected_commits)))
+                
+            except Exception as e:
+                raise Exception(f"Failed to remove commits: {str(e)}")
+        
+        # Run in background thread
+        self.run_in_thread(perform_removal, 
+                        message=f"Removing {len(selected_commits)} commits...", 
+                        success_message=f"Successfully removed {len(selected_commits)} commits")
+
+    def after_commit_removal(self, num_removed):
+        """Update after commit removal"""
+        # Refresh the commit list
+        self.fetch_commit_list()
+        
+        # Show success message
+        messagebox.showinfo("Success", f"Successfully removed {num_removed} commits")
+
 
     def submit_pull_request(self, title, body, head, base, window):
         """Submit the pull request to GitHub"""
