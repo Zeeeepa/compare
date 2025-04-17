@@ -1,1 +1,10 @@
-PyGithub>=2.1.1
+GitPython>=3.1.0
+PyGithub>=1.55
+tkinter  # Usually comes with Python
+typing>=3.7.4
+
+# Development dependencies
+pytest>=6.0.0
+black>=21.0.0
+flake8>=3.9.0
+mypy>=0.900

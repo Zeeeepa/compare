@@ -14,6 +14,8 @@ from tkinter import ttk, filedialog, messagebox
 import platform
 import json
 import webbrowser
+import git
+from github import Github
 from typing import Dict, Any, List, Optional
 
 # Set up logging
@@ -154,7 +156,7 @@ except ImportError:
                         callback("Comparison completed successfully", False)
                     
                     # Create a dummy output directory
-                    output_dir = os.path.join(os.path.expanduser("~"), "RepoComparisons", "dummy_comparison")
+                    output_dir = os.path.join(os.expanduser("~"), "RepoComparisons", "dummy_comparison")
                     os.makedirs(output_dir, exist_ok=True)
                     
                     # Create a dummy summary file
@@ -172,6 +174,151 @@ except ImportError:
             thread.daemon = True
             thread.start()
             return thread
+
+
+class OriginCompareTab:
+    def __init__(self, parent: ttk.Notebook, repo: git.Repo):
+        self.parent = parent
+        self.repo = repo
+        self.frame = ttk.Frame(parent)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Stats Frame
+        stats_frame = ttk.LabelFrame(self.frame, text="Repository Stats")
+        stats_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.ahead_label = ttk.Label(stats_frame, text="Commits Ahead: 0")
+        self.ahead_label.pack(anchor=tk.W, padx=5, pady=2)
+        
+        self.behind_label = ttk.Label(stats_frame, text="Commits Behind: 0")
+        self.behind_label.pack(anchor=tk.W, padx=5, pady=2)
+        
+        # Commits Frame
+        commits_frame = ttk.LabelFrame(self.frame, text="Commits")
+        commits_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Commits List
+        self.commits_tree = ttk.Treeview(commits_frame, columns=("Hash", "Author", "Date", "Message"), show="headings")
+        self.commits_tree.heading("Hash", text="Hash")
+        self.commits_tree.heading("Author", text="Author")
+        self.commits_tree.heading("Date", text="Date")
+        self.commits_tree.heading("Message", text="Message")
+        
+        # Scrollbar for commits list
+        scrollbar = ttk.Scrollbar(commits_frame, orient=tk.VERTICAL, command=self.commits_tree.yview)
+        self.commits_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.commits_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Actions Frame
+        actions_frame = ttk.Frame(self.frame)
+        actions_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        refresh_btn = ttk.Button(actions_frame, text="Refresh", command=self.refresh_comparison)
+        refresh_btn.pack(side=tk.LEFT, padx=5)
+        
+        cherry_pick_btn = ttk.Button(actions_frame, text="Cherry-Pick Selected", command=self.cherry_pick_selected)
+        cherry_pick_btn.pack(side=tk.LEFT, padx=5)
+        
+        view_diff_btn = ttk.Button(actions_frame, text="View Diff", command=self.view_diff)
+        view_diff_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Initialize comparison
+        self.refresh_comparison()
+    
+    def refresh_comparison(self):
+        try:
+            # Get origin remote
+            origin = self.repo.remote('origin')
+            origin.fetch()
+            
+            # Get current and origin branches
+            current = self.repo.active_branch
+            origin_branch = self.repo.refs[f'origin/{current.name}']
+            
+            # Get ahead/behind counts
+            ahead_count = sum(1 for c in self.repo.iter_commits(f'{origin_branch}..{current}'))
+            behind_count = sum(1 for c in self.repo.iter_commits(f'{current}..{origin_branch}'))
+            
+            # Update stats
+            self.ahead_label.config(text=f"Commits Ahead: {ahead_count}")
+            self.behind_label.config(text=f"Commits Behind: {behind_count}")
+            
+            # Clear existing commits
+            for item in self.commits_tree.get_children():
+                self.commits_tree.delete(item)
+            
+            # Add behind commits to tree
+            for commit in self.repo.iter_commits(f'{current}..{origin_branch}'):
+                self.commits_tree.insert("", tk.END, values=(
+                    commit.hexsha[:7],
+                    commit.author.name,
+                    commit.authored_datetime.strftime('%Y-%m-%d %H:%M'),
+                    commit.message.split('\n')[0]
+                ))
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to refresh comparison: {str(e)}")
+    
+    def cherry_pick_selected(self):
+        selected = self.commits_tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Please select commits to cherry-pick")
+            return
+            
+        try:
+            for item in selected:
+                commit_hash = self.commits_tree.item(item)['values'][0]
+                commit = self.repo.commit(commit_hash)
+                self.repo.git.cherry_pick(commit.hexsha)
+                
+            messagebox.showinfo("Success", "Selected commits have been cherry-picked")
+            self.refresh_comparison()
+            
+        except Exception as e:
+            self.repo.git.cherry_pick('--abort')
+            messagebox.showerror("Error", f"Failed to cherry-pick commits: {str(e)}")
+    
+    def view_diff(self):
+        selected = self.commits_tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Please select a commit to view diff")
+            return
+            
+        try:
+            item = selected[0]
+            commit_hash = self.commits_tree.item(item)['values'][0]
+            commit = self.repo.commit(commit_hash)
+            
+            # Create diff window
+            diff_window = tk.Toplevel(self.frame)
+            diff_window.title(f"Diff for {commit_hash}")
+            diff_window.geometry("800x600")
+            
+            # Add diff text widget
+            diff_text = tk.Text(diff_window, wrap=tk.NONE)
+            diff_text.pack(fill=tk.BOTH, expand=True)
+            
+            # Add scrollbars
+            y_scrollbar = ttk.Scrollbar(diff_window, orient=tk.VERTICAL, command=diff_text.yview)
+            x_scrollbar = ttk.Scrollbar(diff_window, orient=tk.HORIZONTAL, command=diff_text.xview)
+            diff_text.configure(yscrollcommand=y_scrollbar.set, xscrollcommand=x_scrollbar.set)
+            
+            y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            x_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+            
+            # Get and display diff
+            diff = commit.parents[0].diff(commit)
+            for d in diff:
+                diff_text.insert(tk.END, f"=== {d.a_path} ===\n")
+                diff_text.insert(tk.END, d.diff.decode('utf-8') + "\n\n")
+            
+            diff_text.configure(state=tk.DISABLED)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to view diff: {str(e)}")
 
 
 class RepoComparisonTool:
