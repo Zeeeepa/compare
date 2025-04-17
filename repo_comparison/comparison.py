@@ -6,7 +6,7 @@ import os
 import logging
 import tempfile
 import shutil
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from git import Repo
 from github.Repository import Repository
 
@@ -17,10 +17,32 @@ class ComparisonManager:
         """Initialize the comparison manager."""
         self.temp_dir = tempfile.mkdtemp()
         logger.info(f"Created temporary directory: {self.temp_dir}")
+        
+        # Repository attributes
+        self.repo1: Optional[Repo] = None
+        self.repo2: Optional[Repo] = None
+        self.repo1_path: Optional[str] = None
+        self.repo2_path: Optional[str] = None
+        
+        # Comparison state
+        self.comparison_in_progress = False
+        self.last_comparison_result: Optional[Dict] = None
+        self.current_operation: Optional[str] = None
+        
+        # Statistics
+        self.stats = {
+            'files_compared': 0,
+            'differences_found': 0,
+            'comparison_time': 0.0
+        }
     
     def cleanup(self):
         """Clean up temporary directories."""
         try:
+            if self.repo1:
+                self.repo1.close()
+            if self.repo2:
+                self.repo2.close()
             shutil.rmtree(self.temp_dir)
             logger.info("Cleaned up temporary directory")
         except Exception as e:
@@ -102,3 +124,45 @@ class ComparisonManager:
         except Exception as e:
             logger.error(f"Error getting commit files: {str(e)}")
             raise
+    
+    def set_repositories(self, repo1_path: str, repo2_path: str) -> Tuple[bool, str]:
+        """Set the repositories for comparison."""
+        try:
+            self.repo1_path = repo1_path
+            self.repo2_path = repo2_path
+            
+            # Clone or open repositories
+            if repo1_path.startswith(('http://', 'https://', 'git@')):
+                self.repo1 = self.clone_repo(repo1_path, os.path.join(self.temp_dir, 'repo1'))
+            else:
+                self.repo1 = Repo(repo1_path)
+            
+            if repo2_path.startswith(('http://', 'https://', 'git@')):
+                self.repo2 = self.clone_repo(repo2_path, os.path.join(self.temp_dir, 'repo2'))
+            else:
+                self.repo2 = Repo(repo2_path)
+            
+            return True, "Repositories set successfully"
+        except Exception as e:
+            logger.error(f"Error setting repositories: {str(e)}")
+            return False, str(e)
+    
+    def get_comparison_status(self) -> Dict[str, any]:
+        """Get current comparison status and statistics."""
+        return {
+            'in_progress': self.comparison_in_progress,
+            'current_operation': self.current_operation,
+            'stats': self.stats,
+            'last_result': self.last_comparison_result
+        }
+    
+    def reset_state(self):
+        """Reset the comparison state."""
+        self.comparison_in_progress = False
+        self.current_operation = None
+        self.stats = {
+            'files_compared': 0,
+            'differences_found': 0,
+            'comparison_time': 0.0
+        }
+        self.last_comparison_result = None

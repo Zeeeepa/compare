@@ -195,6 +195,17 @@ class RepoComparisonTool:
         self.repo1_selected_tag = tk.StringVar()
         self.repo2_selected_tag = tk.StringVar()
         
+        # UI Components
+        self.repo1_tags_listbox = None
+        self.repo2_tags_listbox = None
+        self.status_bar = None
+        self.main_frame = None
+        
+        # State variables
+        self.comparison_in_progress = False
+        self.last_comparison_output = None
+        self.comparison_thread = None
+        
         # Create comparison manager
         self.comparison_manager = ComparisonManager(self.settings)
         
@@ -240,20 +251,20 @@ class RepoComparisonTool:
         self.create_menu()
         
         # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        self.main_frame = ttk.Frame(self.root, padding="10")
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Repository inputs
-        self.create_repo_inputs(main_frame)
+        self.create_repo_inputs(self.main_frame)
         
         # Fetch tags button
-        fetch_frame = ttk.Frame(main_frame)
+        fetch_frame = ttk.Frame(self.main_frame)
         fetch_frame.pack(fill=tk.X, pady=5)
         ModernButton(fetch_frame, text="Fetch Tags & Branches", 
                     command=self.fetch_tags).pack(pady=10)
         
         # Tags selection frame
-        tags_frame = ttk.Frame(main_frame)
+        tags_frame = ttk.Frame(self.main_frame)
         tags_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         tags_frame.columnconfigure(0, weight=1)
         tags_frame.columnconfigure(1, weight=1)
@@ -275,10 +286,10 @@ class RepoComparisonTool:
         self.repo2_tags_listbox.grid(row=0, column=1, sticky=tk.NSEW, padx=5)
         
         # Comparison options
-        self.create_comparison_options(main_frame)
+        self.create_comparison_options(self.main_frame)
         
         # Generate button
-        generate_frame = ttk.Frame(main_frame)
+        generate_frame = ttk.Frame(self.main_frame)
         generate_frame.pack(fill=tk.X, pady=10)
         ModernButton(generate_frame, text="Generate Difference", 
                     command=self.generate_difference).pack(pady=5)
