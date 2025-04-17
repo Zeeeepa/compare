@@ -6,15 +6,17 @@ from github import Github
 import webbrowser
 import tempfile
 import subprocess
+import shutil
+from git import Repo
 
-class GitHubComparisonTool:
+class GitHubCompare:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("GitHub Branch Comparison Tool")
         self.root.geometry("800x600")
         
         # Initialize GitHub client
-        self.gh = None
+        self.github = None
         self.load_github_token()
         
         # Create notebook for tabs
@@ -95,7 +97,7 @@ class GitHubComparisonTool:
                 data = json.load(f)
                 token = data.get('token')
                 if token:
-                    self.gh = Github(token)
+                    self.github = Github(token)
                     self.update_repo_list()
         except (FileNotFoundError, json.JSONDecodeError):
             pass
@@ -103,7 +105,7 @@ class GitHubComparisonTool:
     def save_github_token(self, token):
         with open('github_token.json', 'w') as f:
             json.dump({'token': token}, f)
-        self.gh = Github(token)
+        self.github = Github(token)
         self.update_repo_list()
 
     def show_settings(self):
@@ -127,22 +129,22 @@ class GitHubComparisonTool:
         ttk.Button(settings_window, text="Save", command=save_settings).pack(pady=20)
 
     def update_repo_list(self):
-        if not self.gh:
+        if not self.github:
             return
         
         try:
-            repos = [repo.full_name for repo in self.gh.get_user().get_repos()]
+            repos = [repo.full_name for repo in self.github.get_user().get_repos()]
             self.repo_dropdown['values'] = repos
             self.origin_repo_dropdown['values'] = repos
         except Exception as e:
             messagebox.showerror("Error", f"Failed to fetch repositories: {str(e)}")
 
     def update_branches(self, event=None):
-        if not self.gh or not self.repo_var.get():
+        if not self.github or not self.repo_var.get():
             return
         
         try:
-            repo = self.gh.get_repo(self.repo_var.get())
+            repo = self.github.get_repo(self.repo_var.get())
             branches = [branch.name for branch in repo.get_branches()]
             self.base_branch_dropdown['values'] = branches
             self.compare_branch_dropdown['values'] = branches
@@ -150,11 +152,11 @@ class GitHubComparisonTool:
             messagebox.showerror("Error", f"Failed to fetch branches: {str(e)}")
 
     def update_origin_branches(self, event=None):
-        if not self.gh or not self.origin_repo_var.get():
+        if not self.github or not self.origin_repo_var.get():
             return
         
         try:
-            repo = self.gh.get_repo(self.origin_repo_var.get())
+            repo = self.github.get_repo(self.origin_repo_var.get())
             branches = [branch.name for branch in repo.get_branches()]
             self.origin_base_branch_dropdown['values'] = branches
             self.origin_compare_branch_dropdown['values'] = branches
@@ -162,96 +164,110 @@ class GitHubComparisonTool:
             messagebox.showerror("Error", f"Failed to fetch branches: {str(e)}")
 
     def compare_branches(self, is_origin=False):
-        if not self.gh:
-            messagebox.showerror("Error", "Please set your GitHub token in settings first")
-            return
-        
         try:
-            if is_origin:
-                repo_name = self.origin_repo_var.get()
-                base = self.origin_base_branch_var.get()
-                compare = self.origin_compare_branch_var.get()
-                results_widget = self.origin_results
-            else:
-                repo_name = self.repo_var.get()
-                base = self.base_branch_var.get()
-                compare = self.compare_branch_var.get()
-                results_widget = self.local_results
-            
-            if not all([repo_name, base, compare]):
-                messagebox.showerror("Error", "Please select repository and branches")
+            if not self.github:
+                messagebox.showerror("Error", "Please set your GitHub token in settings first!")
                 return
-            
-            repo = self.gh.get_repo(repo_name)
-            comparison = repo.compare(base, compare)
-            
+
+            repo_name = self.repo_var.get()
+            if not repo_name:
+                messagebox.showerror("Error", "Please select a repository!")
+                return
+
+            repo = self.github.get_repo(repo_name)
+            base_branch = self.base_branch_var.get()
+            compare_branch = self.compare_branch_var.get()
+
+            if is_origin:
+                parent = repo.parent
+                if not parent:
+                    messagebox.showerror("Error", "This repository has no parent/origin!")
+                    return
+                comparison = repo.compare(base_branch, f"{parent.owner.login}:{compare_branch}")
+            else:
+                comparison = repo.compare(base_branch, compare_branch)
+
             # Clear previous results
-            results_widget.delete(1.0, tk.END)
-            
+            for widget in self.results_frame.winfo_children():
+                widget.destroy()
+
             # Show comparison stats
-            stats = f"Comparing {base}...{compare}\n\n"
-            stats += f"Commits ahead: {len(comparison.commits)}\n"
-            stats += f"Total changes: {comparison.total_commits} commits\n"
-            stats += f"Files changed: {comparison.files}\n"
-            stats += f"Additions: {comparison.ahead_by}\n"
-            stats += f"Deletions: {comparison.behind_by}\n\n"
-            results_widget.insert(tk.END, stats)
+            stats = f"Comparing {base_branch} with {compare_branch}\n\n"
             
-            # Show commits
-            results_widget.insert(tk.END, "Commits:\n")
-            for commit in comparison.commits:
-                frame = ttk.Frame(results_widget)
-                
-                # Commit info
-                info_text = f"{commit.commit.message}\n"
-                info_text += f"Files changed: {len(list(commit.files))} with {commit.stats.additions} additions and {commit.stats.deletions} deletions"
-                
-                ttk.Label(frame, text=info_text, wraplength=500).pack(side=tk.LEFT, padx=5)
-                
-                # View button
-                view_btn = ttk.Button(frame, text="View Diff", 
-                                    command=lambda url=commit.html_url: webbrowser.open(url))
-                view_btn.pack(side=tk.LEFT, padx=5)
-                
-                # Merge button
-                merge_btn = ttk.Button(frame, text="Merge", 
-                                     command=lambda c=commit: self.merge_commit(repo, c))
-                merge_btn.pack(side=tk.LEFT, padx=5)
-                
-                results_widget.window_create(tk.END, window=frame)
-                results_widget.insert(tk.END, "\n\n")
+            # Get total commits ahead/behind
+            ahead_commits = list(comparison.ahead_commits)
+            behind_commits = list(comparison.behind_commits)
             
+            stats += f"Commits ahead: {len(ahead_commits)}\n"
+            stats += f"Commits behind: {len(behind_commits)}\n"
+            stats += f"Total commits: {len(ahead_commits) + len(behind_commits)}\n"
+            stats += f"Files changed: {len(list(comparison.files))}\n"
+            
+            Label(self.results_frame, text=stats).pack(pady=10)
+
+            # Show commit list with stats
+            for commit in behind_commits:
+                frame = Frame(self.results_frame, relief=RAISED, borderwidth=1)
+                frame.pack(fill=X, padx=5, pady=5)
+                
+                # Get commit stats
+                files_changed = 0
+                additions = 0
+                deletions = 0
+                try:
+                    detailed_commit = repo.get_commit(commit.sha)
+                    files_changed = len(list(detailed_commit.files))
+                    for file in detailed_commit.files:
+                        additions += file.additions
+                        deletions += file.deletions
+                except:
+                    pass
+
+                info_text = f"{commit.commit.message}\n{files_changed} changed files with {additions} additions and {deletions} deletions"
+                Label(frame, text=info_text, justify=LEFT, wraplength=500).pack(side=LEFT, padx=5)
+
+                Button(frame, text="View Diff", 
+                       command=lambda c=commit: webbrowser.open(c.html_url)).pack(side=RIGHT, padx=5)
+                
+                Button(frame, text="Merge", 
+                       command=lambda c=commit: self.merge_commit(c.sha, repo_name)).pack(side=RIGHT, padx=5)
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to compare branches: {str(e)}")
 
-    def merge_commit(self, repo, commit):
+    def merge_commit(self, commit_sha, repo_name):
         try:
-            # Create a temporary directory for cloning
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Clone the repository
-                clone_url = f"https://github.com/{repo.full_name}.git"
-                subprocess.run(['git', 'clone', clone_url, temp_dir], check=True)
-                
-                # Configure git
-                subprocess.run(['git', 'config', 'user.name', 'GitHub Comparison Tool'], cwd=temp_dir)
-                subprocess.run(['git', 'config', 'user.email', 'noreply@github.com'], cwd=temp_dir)
-                
-                # Cherry-pick the commit
-                subprocess.run(['git', 'cherry-pick', commit.sha], cwd=temp_dir)
-                
-                # Push changes
-                subprocess.run(['git', 'push', 'origin', 'HEAD'], cwd=temp_dir)
-                
-            messagebox.showinfo("Success", f"Successfully merged commit {commit.sha[:7]}")
+            # Clone repo if not already cloned
+            if not os.path.exists(self.workspace):
+                os.makedirs(self.workspace)
             
-        except subprocess.CalledProcessError as e:
-            messagebox.showerror("Error", f"Failed to merge commit: {str(e)}")
+            repo_path = os.path.join(self.workspace, repo_name.split('/')[-1])
+            if not os.path.exists(repo_path):
+                Repo.clone_from(f"https://github.com/{repo_name}.git", repo_path)
+            
+            repo = Repo(repo_path)
+            
+            # Fetch and cherry-pick the commit
+            repo.git.fetch('origin', commit_sha)
+            repo.git.cherry_pick(commit_sha)
+            
+            # Push changes
+            repo.git.push('origin', 'HEAD:main')
+            
+            messagebox.showinfo("Success", f"Successfully merged commit {commit_sha[:7]}")
+            
+            # Refresh the comparison
+            self.compare_branches()
+            
         except Exception as e:
-            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+            messagebox.showerror("Error", f"Failed to merge commit: {str(e)}")
+            # Clean up workspace on error
+            if os.path.exists(self.workspace):
+                shutil.rmtree(self.workspace)
 
     def run(self):
         self.root.mainloop()
 
 if __name__ == "__main__":
-    app = GitHubComparisonTool()
+    app = GitHubCompare()
     app.run()
