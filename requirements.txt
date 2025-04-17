@@ -2,3 +2,5 @@ tkinter
 ttkthemes
 pillow
 gitpython
+PyGithub
+requests
