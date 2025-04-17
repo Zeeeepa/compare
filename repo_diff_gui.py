@@ -10,6 +10,10 @@ import shutil
 from datetime import datetime
 import urllib.parse
 import logging
+from repo_comparison.github_handler import GithubHandler
+from github.Repository import Repository
+from github.Branch import Branch
+from github.Commit import Commit
 
 # Set up logging
 logging.basicConfig(
@@ -25,8 +29,8 @@ class RepoComparisonTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Repository Comparison Tool")
-        self.root.geometry("900x700")
-        self.root.minsize(900, 700)
+        self.root.geometry("1200x800")
+        self.root.minsize(1200, 800)
         
         # Set style
         self.style = ttk.Style()
@@ -45,16 +49,54 @@ class RepoComparisonTool:
         self.repo1_selected_tag = tk.StringVar()
         self.repo2_selected_tag = tk.StringVar()
         
+        # GitHub integration
+        self.github_token = os.getenv('GITHUB_TOKEN')
+        self.github_handler = None
+        if self.github_token:
+            try:
+                self.github_handler = GithubHandler(self.github_token)
+            except Exception as e:
+                logger.error(f"Failed to initialize GitHub handler: {str(e)}")
+        
+        self.github_repos = []
+        self.selected_repo = None
+        self.repo_branches = []
+        self.selected_branch = None
+        self.comparison_commits = []
+        
         # Create temp directory for cloning repos
         self.temp_dir = tempfile.mkdtemp()
         logger.info(f"Created temporary directory: {self.temp_dir}")
         
         # Create UI
         self.create_ui()
-        
+    
     def create_ui(self):
-        # Main frame
+        # Main frame with notebook for tabs
         main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Local comparison tab
+        local_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(local_frame, text="Local Comparison")
+        self.create_local_comparison_ui(local_frame)
+        
+        # GitHub comparison tab
+        github_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(github_frame, text="GitHub Comparison")
+        self.create_github_comparison_ui(github_frame)
+        
+        # Status bar
+        status_frame = ttk.Frame(self.root)
+        status_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        ttk.Label(status_frame, textvariable=self.status_text).pack(side=tk.LEFT, padx=10)
+    
+    def create_local_comparison_ui(self, parent):
+        # Main frame
+        main_frame = ttk.Frame(parent, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # Repository 1 frame
@@ -137,15 +179,73 @@ class RepoComparisonTool:
         generate_frame = ttk.Frame(main_frame)
         generate_frame.pack(fill=tk.X, pady=10)
         ttk.Button(generate_frame, text="Generate Difference", command=self.generate_difference).pack(pady=5)
+    
+    def create_github_comparison_ui(self, parent):
+        # Repository selection frame
+        repo_frame = ttk.LabelFrame(parent, text="GitHub Repository", padding="10")
+        repo_frame.pack(fill=tk.X, pady=5)
         
-        # Status bar
-        status_frame = ttk.Frame(self.root)
-        status_frame.pack(fill=tk.X, side=tk.BOTTOM)
-        ttk.Label(status_frame, textvariable=self.status_text).pack(side=tk.LEFT, padx=10)
+        # Repository list
+        repo_list_frame = ttk.Frame(repo_frame)
+        repo_list_frame.pack(fill=tk.X, pady=5)
         
-        # Set up tag selection handlers
-        self.repo1_tags_listbox.bind('<<ListboxSelect>>', lambda e: self.on_tag_select(1))
-        self.repo2_tags_listbox.bind('<<ListboxSelect>>', lambda e: self.on_tag_select(2))
+        self.repo_listbox = tk.Listbox(repo_list_frame, height=5)
+        self.repo_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        repo_scrollbar = ttk.Scrollbar(repo_list_frame, orient="vertical", command=self.repo_listbox.yview)
+        self.repo_listbox.configure(yscrollcommand=repo_scrollbar.set)
+        repo_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Refresh repositories button
+        ttk.Button(repo_frame, text="Refresh Repositories", command=self.refresh_github_repos).pack(pady=5)
+        
+        # Branch selection frame
+        branch_frame = ttk.LabelFrame(parent, text="Branch Selection", padding="10")
+        branch_frame.pack(fill=tk.X, pady=5)
+        
+        # Branch lists
+        branches_container = ttk.Frame(branch_frame)
+        branches_container.pack(fill=tk.X, pady=5)
+        
+        # Base branch
+        base_frame = ttk.LabelFrame(branches_container, text="Base Branch", padding="5")
+        base_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        self.base_branch_listbox = tk.Listbox(base_frame, height=5)
+        self.base_branch_listbox.pack(fill=tk.X)
+        
+        # Compare branch
+        compare_frame = ttk.LabelFrame(branches_container, text="Compare Branch", padding="5")
+        compare_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        self.compare_branch_listbox = tk.Listbox(compare_frame, height=5)
+        self.compare_branch_listbox.pack(fill=tk.X)
+        
+        # Compare button
+        ttk.Button(branch_frame, text="Compare Branches", command=self.compare_branches).pack(pady=5)
+        
+        # Commits frame
+        commits_frame = ttk.LabelFrame(parent, text="Commits", padding="10")
+        commits_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        # Commit information
+        info_frame = ttk.Frame(commits_frame)
+        info_frame.pack(fill=tk.X, pady=5)
+        
+        self.ahead_label = ttk.Label(info_frame, text="Ahead by: 0")
+        self.ahead_label.pack(side=tk.LEFT, padx=5)
+        
+        self.behind_label = ttk.Label(info_frame, text="Behind by: 0")
+        self.behind_label.pack(side=tk.LEFT, padx=5)
+        
+        # Commits list
+        self.commits_listbox = tk.Listbox(commits_frame, height=10)
+        self.commits_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        commits_scrollbar = ttk.Scrollbar(self.commits_listbox, orient="vertical", command=self.commits_listbox.yview)
+        self.commits_listbox.configure(yscrollcommand=commits_scrollbar.set)
+        commits_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Apply commit button
+        ttk.Button(commits_frame, text="Apply Selected Commit", command=self.apply_selected_commit).pack(pady=5)
     
     def browse_repo(self, path_var):
         folder_path = filedialog.askdirectory()
@@ -857,6 +957,119 @@ class RepoComparisonTool:
             shutil.rmtree(self.temp_dir, ignore_errors=True)
         except Exception as e:
             logger.error(f"Error during cleanup: {str(e)}")
+    
+    def refresh_github_repos(self):
+        """Refresh the list of GitHub repositories."""
+        if not self.github_handler:
+            messagebox.showerror("Error", "GitHub integration not available. Please set GITHUB_TOKEN environment variable.")
+            return
+            
+        try:
+            self.update_status("Fetching repositories...")
+            self.github_repos = self.github_handler.get_user_repos()
+            
+            self.repo_listbox.delete(0, tk.END)
+            for repo in self.github_repos:
+                self.repo_listbox.insert(tk.END, repo.full_name)
+                
+            self.update_status("Repositories refreshed successfully")
+            
+            # Set up selection handler
+            self.repo_listbox.bind('<<ListboxSelect>>', self.on_repo_select)
+        except Exception as e:
+            error_msg = f"Error fetching repositories: {str(e)}"
+            logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+    
+    def on_repo_select(self, event):
+        """Handle repository selection."""
+        if not self.repo_listbox.curselection():
+            return
+            
+        try:
+            index = self.repo_listbox.curselection()[0]
+            self.selected_repo = self.github_repos[index]
+            self.update_status(f"Selected repository: {self.selected_repo.full_name}")
+            
+            # Fetch branches
+            self.repo_branches = self.github_handler.get_repo_branches(self.selected_repo)
+            
+            # Update branch listboxes
+            self.base_branch_listbox.delete(0, tk.END)
+            self.compare_branch_listbox.delete(0, tk.END)
+            
+            for branch in self.repo_branches:
+                self.base_branch_listbox.insert(tk.END, branch.name)
+                self.compare_branch_listbox.insert(tk.END, branch.name)
+        except Exception as e:
+            error_msg = f"Error loading repository details: {str(e)}"
+            logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+    
+    def compare_branches(self):
+        """Compare selected branches and show commits."""
+        if not self.selected_repo:
+            messagebox.showerror("Error", "Please select a repository first")
+            return
+            
+        if not self.base_branch_listbox.curselection() or not self.compare_branch_listbox.curselection():
+            messagebox.showerror("Error", "Please select both base and compare branches")
+            return
+            
+        try:
+            base_branch = self.repo_branches[self.base_branch_listbox.curselection()[0]].name
+            compare_branch = self.repo_branches[self.compare_branch_listbox.curselection()[0]].name
+            
+            self.update_status(f"Comparing branches {base_branch} and {compare_branch}...")
+            
+            ahead_by, behind_by, commits = self.github_handler.get_branch_comparison(
+                self.selected_repo, base_branch, compare_branch)
+                
+            self.ahead_label.config(text=f"Ahead by: {ahead_by}")
+            self.behind_label.config(text=f"Behind by: {behind_by}")
+            
+            self.commits_listbox.delete(0, tk.END)
+            self.comparison_commits = commits
+            
+            for commit in commits:
+                self.commits_listbox.insert(tk.END, f"{commit.sha[:7]} - {commit.commit.message.split('\n')[0]}")
+                
+            self.update_status("Branch comparison complete")
+        except Exception as e:
+            error_msg = f"Error comparing branches: {str(e)}"
+            logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
+    
+    def apply_selected_commit(self):
+        """Apply the selected commit and show statistics."""
+        if not self.commits_listbox.curselection():
+            messagebox.showerror("Error", "Please select a commit to apply")
+            return
+            
+        try:
+            index = self.commits_listbox.curselection()[0]
+            commit = self.comparison_commits[index]
+            
+            self.update_status(f"Applying commit {commit.sha[:7]}...")
+            
+            stats = self.github_handler.apply_commit(self.selected_repo, commit)
+            
+            success_msg = (
+                f"Successfully applied commit!\n\n"
+                f"Files changed: {stats['files_changed']}\n"
+                f"Additions: {stats['additions']}\n"
+                f"Deletions: {stats['deletions']}\n"
+                f"Total changes: {stats['total']}"
+            )
+            
+            messagebox.showinfo("Success", success_msg)
+            
+            # Refresh the comparison
+            self.compare_branches()
+        except Exception as e:
+            error_msg = f"Error applying commit: {str(e)}"
+            logger.error(error_msg)
+            messagebox.showerror("Error", error_msg)
 
 def main():
     root = tk.Tk()
