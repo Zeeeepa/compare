@@ -1,3 +1,0 @@
-@echo off
-echo Starting Repository Comparison Tool...
-python repo_diff_gui.py
