@@ -8,62 +8,65 @@ import git
 import tempfile
 import shutil
 
-class GitHubCompare:
+class GitHubComparisonTool:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("GitHub Repository Comparison")
+        self.root.title("GitHub Branch Comparison Tool")
         self.root.geometry("800x600")
         
         # Initialize GitHub API
         self.gh = None
-        self.load_token()
+        self.load_github_token()
         
-        # Create main container
-        self.container = ttk.Frame(self.root)
-        self.container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(self.container)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        # Create main notebook for tabs
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(expand=True, fill='both', padx=10, pady=5)
         
         # Create tabs
         self.local_tab = ttk.Frame(self.notebook)
         self.origin_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.local_tab, text="Local Compare")
-        self.notebook.add(self.origin_tab, text="Origin Compare")
+        self.notebook.add(self.local_tab, text='Local Branch Compare')
+        self.notebook.add(self.origin_tab, text='Origin Compare')
         
         # Setup UI elements
+        self.setup_settings_button()
         self.setup_local_tab()
         self.setup_origin_tab()
-        self.setup_settings_button()
+        
+        # Initialize variables
+        self.repo = None
+        self.origin_repo = None
+        self.temp_dir = None
 
     def setup_settings_button(self):
-        settings_btn = ttk.Button(self.container, text="⚙️ Settings", command=self.show_settings)
-        settings_btn.pack(side=tk.TOP, pady=5)
+        settings_frame = ttk.Frame(self.root)
+        settings_frame.pack(fill='x', padx=10, pady=5)
+        ttk.Button(settings_frame, text="⚙️ Settings", command=self.show_settings).pack(side='right')
 
     def setup_local_tab(self):
         # Repository selection
-        repo_frame = ttk.Frame(self.local_tab)
-        repo_frame.pack(fill=tk.X, padx=5, pady=5)
+        repo_frame = ttk.LabelFrame(self.local_tab, text="Repository Selection")
+        repo_frame.pack(fill='x', padx=10, pady=5)
         
-        ttk.Label(repo_frame, text="Repository:").pack(side=tk.LEFT)
-        self.local_repo_var = tk.StringVar()
-        self.local_repo_dropdown = ttk.Combobox(repo_frame, textvariable=self.local_repo_var)
-        self.local_repo_dropdown.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.repo_var = tk.StringVar()
+        self.repo_dropdown = ttk.Combobox(repo_frame, textvariable=self.repo_var)
+        self.repo_dropdown.pack(fill='x', padx=5, pady=5)
+        self.repo_dropdown.bind('<<ComboboxSelected>>', self.on_repo_selected)
         
         # Branch selection
-        branches_frame = ttk.Frame(self.local_tab)
-        branches_frame.pack(fill=tk.X, padx=5, pady=5)
+        branch_frame = ttk.LabelFrame(self.local_tab, text="Branch Selection")
+        branch_frame.pack(fill='x', padx=10, pady=5)
         
-        ttk.Label(branches_frame, text="Base Branch:").pack(side=tk.LEFT)
         self.base_branch_var = tk.StringVar()
-        self.base_branch_dropdown = ttk.Combobox(branches_frame, textvariable=self.base_branch_var)
-        self.base_branch_dropdown.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(branches_frame, text="Compare Branch:").pack(side=tk.LEFT)
         self.compare_branch_var = tk.StringVar()
-        self.compare_branch_dropdown = ttk.Combobox(branches_frame, textvariable=self.compare_branch_var)
-        self.compare_branch_dropdown.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(branch_frame, text="Base Branch:").pack(side='left', padx=5)
+        self.base_branch_dropdown = ttk.Combobox(branch_frame, textvariable=self.base_branch_var)
+        self.base_branch_dropdown.pack(side='left', padx=5)
+        
+        ttk.Label(branch_frame, text="Compare Branch:").pack(side='left', padx=5)
+        self.compare_branch_dropdown = ttk.Combobox(branch_frame, textvariable=self.compare_branch_var)
+        self.compare_branch_dropdown.pack(side='left', padx=5)
         
         # Compare button
         ttk.Button(self.local_tab, text="Compare Branches", 
@@ -71,17 +74,32 @@ class GitHubCompare:
         
         # Results
         self.local_results = tk.Text(self.local_tab, height=20, wrap=tk.WORD)
-        self.local_results.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.local_results.pack(fill='both', expand=True, padx=10, pady=5)
 
     def setup_origin_tab(self):
         # Repository selection
-        repo_frame = ttk.Frame(self.origin_tab)
-        repo_frame.pack(fill=tk.X, padx=5, pady=5)
+        repo_frame = ttk.LabelFrame(self.origin_tab, text="Repository Selection")
+        repo_frame.pack(fill='x', padx=10, pady=5)
         
-        ttk.Label(repo_frame, text="Repository:").pack(side=tk.LEFT)
         self.origin_repo_var = tk.StringVar()
         self.origin_repo_dropdown = ttk.Combobox(repo_frame, textvariable=self.origin_repo_var)
-        self.origin_repo_dropdown.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.origin_repo_dropdown.pack(fill='x', padx=5, pady=5)
+        self.origin_repo_dropdown.bind('<<ComboboxSelected>>', self.on_origin_repo_selected)
+        
+        # Branch selection
+        branch_frame = ttk.LabelFrame(self.origin_tab, text="Branch Selection")
+        branch_frame.pack(fill='x', padx=10, pady=5)
+        
+        self.origin_base_branch_var = tk.StringVar()
+        self.origin_compare_branch_var = tk.StringVar()
+        
+        ttk.Label(branch_frame, text="Base Branch:").pack(side='left', padx=5)
+        self.origin_base_branch_dropdown = ttk.Combobox(branch_frame, textvariable=self.origin_base_branch_var)
+        self.origin_base_branch_dropdown.pack(side='left', padx=5)
+        
+        ttk.Label(branch_frame, text="Compare Branch:").pack(side='left', padx=5)
+        self.origin_compare_branch_dropdown = ttk.Combobox(branch_frame, textvariable=self.origin_compare_branch_var)
+        self.origin_compare_branch_dropdown.pack(side='left', padx=5)
         
         # Compare button
         ttk.Button(self.origin_tab, text="Compare with Origin", 
@@ -89,224 +107,197 @@ class GitHubCompare:
         
         # Results
         self.origin_results = tk.Text(self.origin_tab, height=20, wrap=tk.WORD)
-        self.origin_results.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.origin_results.pack(fill='both', expand=True, padx=10, pady=5)
 
-    def load_token(self):
+    def load_github_token(self):
         try:
-            if os.path.exists('github_token.json'):
-                with open('github_token.json', 'r') as f:
-                    data = json.load(f)
-                    token = data.get('token')
-                    if token:
-                        self.gh = Github(token)
-                        self.update_repo_lists()
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load GitHub token: {str(e)}")
+            with open('github_token.json', 'r') as f:
+                data = json.load(f)
+                token = data.get('token')
+                if token:
+                    self.gh = Github(token)
+                    self.update_repo_list()
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
 
-    def save_token(self, token):
-        try:
-            with open('github_token.json', 'w') as f:
-                json.dump({'token': token}, f)
-            self.gh = Github(token)
-            self.update_repo_lists()
-            messagebox.showinfo("Success", "GitHub token saved successfully!")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to save GitHub token: {str(e)}")
+    def save_github_token(self, token):
+        with open('github_token.json', 'w') as f:
+            json.dump({'token': token}, f)
 
     def show_settings(self):
-        settings = tk.Toplevel(self.root)
-        settings.title("Settings")
-        settings.geometry("400x150")
+        settings_window = tk.Toplevel(self.root)
+        settings_window.title("Settings")
+        settings_window.geometry("400x150")
         
-        ttk.Label(settings, text="GitHub Token:").pack(pady=5)
-        token_entry = ttk.Entry(settings, width=50)
-        token_entry.pack(pady=5)
+        ttk.Label(settings_window, text="GitHub Token:").pack(padx=10, pady=5)
+        token_entry = ttk.Entry(settings_window, width=50)
+        token_entry.pack(padx=10, pady=5)
         
-        if os.path.exists('github_token.json'):
-            try:
-                with open('github_token.json', 'r') as f:
-                    data = json.load(f)
-                    token_entry.insert(0, data.get('token', ''))
-            except:
-                pass
+        try:
+            with open('github_token.json', 'r') as f:
+                data = json.load(f)
+                token_entry.insert(0, data.get('token', ''))
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
         
-        ttk.Button(settings, text="Save", 
-                  command=lambda: self.save_token(token_entry.get())).pack(pady=10)
+        def save_settings():
+            token = token_entry.get().strip()
+            if token:
+                try:
+                    # Test token
+                    gh = Github(token)
+                    gh.get_user().login
+                    self.save_github_token(token)
+                    self.gh = gh
+                    self.update_repo_list()
+                    messagebox.showinfo("Success", "GitHub token saved successfully!")
+                    settings_window.destroy()
+                except Exception as e:
+                    messagebox.showerror("Error", f"Invalid GitHub token: {str(e)}")
+            else:
+                messagebox.showerror("Error", "Please enter a GitHub token")
+        
+        ttk.Button(settings_window, text="Save", command=save_settings).pack(pady=10)
 
-    def update_repo_lists(self):
+    def update_repo_list(self):
         if not self.gh:
             return
-            
+        
         try:
             repos = [repo.full_name for repo in self.gh.get_user().get_repos()]
-            self.local_repo_dropdown['values'] = repos
+            self.repo_dropdown['values'] = repos
             self.origin_repo_dropdown['values'] = repos
-            
-            if repos:
-                self.local_repo_var.set(repos[0])
-                self.origin_repo_var.set(repos[0])
-                self.update_branch_lists()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to fetch repositories: {str(e)}")
 
-    def update_branch_lists(self):
-        if not self.gh or not self.local_repo_var.get():
+    def on_repo_selected(self, event=None):
+        if not self.gh:
+            messagebox.showerror("Error", "Please set your GitHub token in settings first")
             return
-            
+        
         try:
-            repo = self.gh.get_repo(self.local_repo_var.get())
-            branches = [branch.name for branch in repo.get_branches()]
-            
+            self.repo = self.gh.get_repo(self.repo_var.get())
+            branches = [branch.name for branch in self.repo.get_branches()]
             self.base_branch_dropdown['values'] = branches
             self.compare_branch_dropdown['values'] = branches
             
-            if branches:
-                self.base_branch_var.set(branches[0])
-                self.compare_branch_var.set(branches[0])
+            # Set default branch
+            default_branch = self.repo.default_branch
+            self.base_branch_var.set(default_branch)
+            self.compare_branch_var.set(default_branch)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to fetch branches: {str(e)}")
 
+    def on_origin_repo_selected(self, event=None):
+        if not self.gh:
+            messagebox.showerror("Error", "Please set your GitHub token in settings first")
+            return
+        
+        try:
+            self.repo = self.gh.get_repo(self.origin_repo_var.get())
+            
+            # Get parent/origin repository
+            if self.repo.parent:
+                self.origin_repo = self.repo.parent
+                branches = [branch.name for branch in self.origin_repo.get_branches()]
+                self.origin_base_branch_dropdown['values'] = branches
+                self.origin_compare_branch_dropdown['values'] = branches
+                
+                # Set default branch
+                default_branch = self.origin_repo.default_branch
+                self.origin_base_branch_var.set(default_branch)
+                self.origin_compare_branch_var.set(default_branch)
+            else:
+                messagebox.showwarning("Warning", "Selected repository is not a fork")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to fetch origin repository: {str(e)}")
+
     def compare_branches(self, compare_with_origin=False):
         if not self.gh:
-            messagebox.showerror("Error", "Please set your GitHub token in Settings first!")
+            messagebox.showerror("Error", "Please set your GitHub token in settings first")
             return
-            
+        
         try:
             if compare_with_origin:
-                repo_name = self.origin_repo_var.get()
-                repo = self.gh.get_repo(repo_name)
+                if not self.origin_repo:
+                    messagebox.showerror("Error", "Please select a forked repository first")
+                    return
                 
-                # Get parent/origin repository
-                if repo.parent:
-                    origin_repo = repo.parent
-                    comparison = repo.compare(f"{origin_repo.owner.login}:main", "main")
-                    
-                    # Clear previous results
-                    self.origin_results.delete(1.0, tk.END)
-                    
-                    # Show repository info
-                    self.origin_results.insert(tk.END, f"Comparing with origin repository: {origin_repo.full_name}\n\n")
-                    
-                    # Show commit stats
-                    stats = f"Stats:\n"
-                    stats += f"Commits ahead: {len(list(comparison.ahead_commits))}\n"
-                    stats += f"Commits behind: {len(list(comparison.behind_commits))}\n\n"
-                    self.origin_results.insert(tk.END, stats)
-                    
-                    # Show behind commits
-                    self.origin_results.insert(tk.END, "Behind Commits:\n")
-                    for i, commit in enumerate(comparison.behind_commits, 1):
-                        commit_info = f"\n{i}. {commit.commit.message}\n"
-                        
-                        # Get commit stats
-                        try:
-                            files_changed = len(list(commit.files))
-                            additions = commit.stats.additions
-                            deletions = commit.stats.deletions
-                            commit_info += f"   {files_changed} changed files with {additions} additions and {deletions} deletions\n"
-                        except:
-                            commit_info += "   Stats not available\n"
-                        
-                        # Add buttons frame
-                        buttons_frame = ttk.Frame(self.origin_tab)
-                        self.origin_results.window_create(tk.END, window=buttons_frame)
-                        
-                        # View Diff button
-                        ttk.Button(buttons_frame, text="View Diff", 
-                                 command=lambda c=commit: webbrowser.open(c.html_url)).pack(side=tk.LEFT, padx=5)
-                        
-                        # Merge button
-                        ttk.Button(buttons_frame, text="Merge", 
-                                 command=lambda c=commit: self.merge_commit(c, repo_name)).pack(side=tk.LEFT, padx=5)
-                        
-                        self.origin_results.insert(tk.END, "\n" + "-"*50 + "\n")
-                else:
-                    messagebox.showinfo("Info", "This repository has no parent/origin repository.")
+                base_repo = self.origin_repo
+                base_branch = self.origin_base_branch_var.get()
+                compare_repo = self.repo
+                compare_branch = self.origin_compare_branch_var.get()
+                results_widget = self.origin_results
             else:
-                # Local branch comparison
-                repo_name = self.local_repo_var.get()
-                repo = self.gh.get_repo(repo_name)
-                base = self.base_branch_var.get()
-                compare = self.compare_branch_var.get()
-                
-                comparison = repo.compare(base, compare)
-                
-                # Clear previous results
-                self.local_results.delete(1.0, tk.END)
-                
-                # Show commit stats
-                stats = f"Comparing {base} with {compare}:\n\n"
-                stats += f"Total commits: {len(list(comparison.commits))}\n"
-                stats += f"Changed files: {comparison.total_commits}\n"
-                stats += f"Additions: {comparison.ahead_by}\n"
-                stats += f"Deletions: {comparison.behind_by}\n\n"
-                self.local_results.insert(tk.END, stats)
-                
-                # Show commits
-                self.local_results.insert(tk.END, "Commits:\n")
-                for i, commit in enumerate(comparison.commits, 1):
-                    commit_info = f"\n{i}. {commit.commit.message}\n"
-                    self.local_results.insert(tk.END, commit_info)
-                    
-                    # Add buttons frame
-                    buttons_frame = ttk.Frame(self.local_tab)
-                    self.local_results.window_create(tk.END, window=buttons_frame)
-                    
-                    # View Diff button
-                    ttk.Button(buttons_frame, text="View Diff", 
-                             command=lambda c=commit: webbrowser.open(c.html_url)).pack(side=tk.LEFT, padx=5)
-                    
-                    self.local_results.insert(tk.END, "\n" + "-"*50 + "\n")
-                
-        except Exception as e:
-            messagebox.showerror("Error", f"Comparison failed: {str(e)}")
-
-    def merge_commit(self, commit, repo_name):
-        try:
-            # Create temporary directory
-            temp_dir = tempfile.mkdtemp()
+                base_repo = self.repo
+                base_branch = self.base_branch_var.get()
+                compare_repo = self.repo
+                compare_branch = self.compare_branch_var.get()
+                results_widget = self.local_results
             
-            try:
-                # Clone repository
-                repo = git.Repo.clone_from(f"https://github.com/{repo_name}.git", temp_dir)
+            # Clear previous results
+            results_widget.delete(1.0, tk.END)
+            
+            # Get comparison
+            comparison = base_repo.compare(base_branch, f"{compare_repo.owner.login}:{compare_branch}")
+            
+            # Display stats
+            stats = f"Comparing {base_repo.full_name}:{base_branch} with {compare_repo.full_name}:{compare_branch}\n\n"
+            stats += f"Commits ahead: {comparison.ahead_by}\n"
+            stats += f"Commits behind: {comparison.behind_by}\n"
+            stats += f"Total commits: {len(comparison.commits)}\n"
+            stats += f"Files changed: {len(comparison.files)}\n\n"
+            
+            # Display commits
+            stats += "Commits:\n"
+            for i, commit in enumerate(comparison.commits, 1):
+                stats += f"\n{i}. {commit.commit.message.splitlines()[0]}\n"
+                stats += f"   SHA: {commit.sha}\n"
+                stats += f"   Author: {commit.commit.author.name}\n"
                 
-                # Create and checkout new branch
-                new_branch = f"merge-{commit.sha[:7]}"
-                current = repo.create_head(new_branch)
-                current.checkout()
+                # Add View Diff and Merge buttons
+                commit_frame = ttk.Frame(results_widget)
+                ttk.Button(commit_frame, text="View Diff", 
+                          command=lambda c=commit: webbrowser.open(c.html_url)).pack(side='left', padx=5)
+                ttk.Button(commit_frame, text="Merge", 
+                          command=lambda c=commit: self.merge_commit(c, base_branch)).pack(side='left', padx=5)
                 
-                # Cherry pick the commit
-                repo.git.cherry_pick(commit.sha)
-                
-                # Push changes
-                repo.git.push('origin', new_branch)
-                
-                # Create pull request
-                gh_repo = self.gh.get_repo(repo_name)
-                pr = gh_repo.create_pull(
-                    title=f"Merge commit {commit.sha[:7]}",
-                    body=f"Cherry-picked commit from origin:\n\n{commit.commit.message}",
-                    head=new_branch,
-                    base="main"
-                )
-                
-                messagebox.showinfo("Success", f"Created PR #{pr.number} for the merge!")
-                webbrowser.open(pr.html_url)
-                
-            finally:
-                # Cleanup
-                shutil.rmtree(temp_dir)
-                
+                results_widget.window_create(tk.END, window=commit_frame)
+                results_widget.insert(tk.END, "\n")
+            
+            results_widget.insert(1.0, stats)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to compare branches: {str(e)}")
+
+    def merge_commit(self, commit, target_branch):
+        try:
+            # Create temporary directory for git operations
+            self.temp_dir = tempfile.mkdtemp()
+            
+            # Clone repository
+            repo_url = f"https://{self.gh._Github__requester._Requester__auth.token}@github.com/{self.repo.full_name}.git"
+            git_repo = git.Repo.clone_from(repo_url, self.temp_dir)
+            
+            # Checkout target branch
+            git_repo.git.checkout(target_branch)
+            
+            # Cherry-pick the commit
+            git_repo.git.cherry_pick(commit.sha)
+            
+            # Push changes
+            git_repo.git.push('origin', target_branch)
+            
+            messagebox.showinfo("Success", f"Successfully merged commit {commit.sha[:7]}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to merge commit: {str(e)}")
+        finally:
+            # Cleanup
+            if self.temp_dir and os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
 
     def run(self):
-        # Bind repository selection to branch update
-        self.local_repo_dropdown.bind('<<ComboboxSelected>>', lambda e: self.update_branch_lists())
-        
-        # Start the application
         self.root.mainloop()
 
 if __name__ == "__main__":
-    app = GitHubCompare()
+    app = GitHubComparisonTool()
     app.run()
