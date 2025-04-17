@@ -231,15 +231,55 @@ class GitHubCompare:
 
     def merge_commit(self, commit_sha):
         try:
-            repo = self.g.get_repo(self.repo_var.get())
-            # Create a cherry-pick merge
-            base_branch = self.base_branch_var.get()
-            repo.merge(base_branch, commit_sha, f"Cherry-pick merge of {commit_sha[:7]}")
-            messagebox.showinfo("Success", f"Successfully merged commit {commit_sha[:7]}")
-            # Refresh the comparison
-            self.compare_branches()
+            # Get the current repository and branch based on active tab
+            if self.notebook.select() == self.notebook.tabs()[0]:  # Local Compare tab
+                repo = self.g.get_repo(self.repo_var.get())
+                base_branch = self.base_branch_var.get()
+            else:  # Origin Compare tab
+                repo = self.g.get_repo(self.origin_repo_var.get())
+                base_branch = self.origin_base_branch_var.get()
+            
+            # Create a temporary branch for cherry-picking
+            temp_branch = f"cherry-pick-{commit_sha[:7]}"
+            base_ref = repo.get_git_ref(f"heads/{base_branch}")
+            repo.create_git_ref(f"refs/heads/{temp_branch}", base_ref.object.sha)
+            
+            # Cherry-pick the commit onto the temporary branch
+            try:
+                # Get the commit object
+                commit = repo.get_commit(commit_sha)
+                
+                # Create a new commit with the changes
+                new_commit = repo.merge(base_branch, commit_sha, f"Cherry-pick: {commit.commit.message}")
+                
+                # Create a pull request
+                pr = repo.create_pull(
+                    title=f"Cherry-pick: {commit.commit.message}",
+                    body=f"Cherry-picked commit {commit_sha}",
+                    head=temp_branch,
+                    base=base_branch
+                )
+                
+                messagebox.showinfo("Success", f"Created PR #{pr.number} for cherry-pick")
+                webbrowser.open(pr.html_url)
+                
+                # Refresh the commit list
+                if self.notebook.select() == self.notebook.tabs()[0]:
+                    self.compare_branches()
+                else:
+                    self.compare_with_origin()
+                
+            except Exception as e:
+                # Clean up the temporary branch if something went wrong
+                try:
+                    repo.get_git_ref(f"refs/heads/{temp_branch}").delete()
+                except:
+                    pass
+                raise e
+                
         except Exception as e:
             messagebox.showerror("Error", f"Failed to merge commit: {str(e)}")
+            print(f"Error details: {e}")
 
     def show_settings(self):
         settings = tk.Toplevel(self.root)
