@@ -155,7 +155,7 @@ class GitHubCompare:
         
         # Bind mousewheel scrolling
         self.commits_canvas.bind_all("<MouseWheel>", lambda event: self.commits_canvas.yview_scroll(int(-1*(event.delta/120)), "units"))
-        
+    
     def on_canvas_configure(self, event):
         # Update the width of the canvas window when the canvas size changes
         self.commits_canvas.itemconfig(self.commits_canvas_window, width=event.width)
@@ -628,7 +628,7 @@ class GitHubCompare:
         
         # Clear comparison results
         self.clear_comparison_results()
-        
+
     def clear_comparison_results(self):
         """Clear comparison results in both tabs"""
         # Clear local tab results
@@ -924,37 +924,34 @@ class GitHubCompare:
             
         def perform_merge():
             try:
-                # Apply the cherry-pick via API
+                # Get the base branch name and ref
                 base_branch = self.origin_base_branch_var.get()
-                
-                # Create a temporary branch from the base
-                temp_branch = f"temp-merge-{commit.sha[:7]}"
                 base_ref = self.current_fork.get_git_ref(f"heads/{base_branch}")
-                self.current_fork.create_git_ref(f"refs/heads/{temp_branch}", base_ref.object.sha)
                 
-                # Cherry-pick the commit to the temp branch
-                # This isn't directly supported by PyGithub, so we'll do a manual cherry-pick
-                # by creating a commit with the same changes
-                cherry_pick = self.current_fork.merge(
-                    temp_branch,
-                    commit.sha,
-                    f"Cherry-pick: {commit.commit.message}"
+                # Get the commit tree
+                commit_to_merge = self.current_parent.get_git_commit(commit.sha)
+                base_commit = self.current_fork.get_git_commit(base_ref.object.sha)
+                
+                # Create a new tree with the changes
+                new_tree = self.current_fork.merge_trees(
+                    base_tree=base_commit.tree,
+                    head_sha=commit_to_merge.sha
                 )
                 
-                # Merge temp branch back to base
-                merge_result = self.current_fork.merge(
-                    base_branch,
-                    temp_branch,
-                    f"Merge commit {commit.sha[:7]} from parent"
+                # Create a new commit
+                new_commit = self.current_fork.create_git_commit(
+                    message=f"Cherry-pick: {commit.commit.message}",
+                    tree=new_tree,
+                    parents=[base_ref.object.sha]
                 )
                 
-                # Delete the temporary branch
-                self.current_fork.get_git_ref(f"heads/{temp_branch}").delete()
+                # Update the branch reference
+                base_ref.edit(new_commit.sha, force=False)
                 
                 # Update UI in main thread
                 self.root.after(0, lambda: self.after_merge())
                 
-                return merge_result
+                return new_commit
                 
             except Exception as e:
                 raise Exception(f"Failed to merge commit: {str(e)}")
