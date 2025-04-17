@@ -8,6 +8,7 @@ A tool for comparing Git repositories and managing commits.
 import os
 import sys
 import logging
+import tkinter as tk
 from repo_comparison.github_handler import GithubHandler
 from repo_comparison.comparison import ComparisonManager
 from repo_diff_gui_upgraded import RepoComparisonTool
@@ -57,9 +58,11 @@ def main():
         github_handler = GithubHandler()
         comparison_manager = ComparisonManager()
         
-        # Start the GUI application
-        app = RepoComparisonTool()
-        app.mainloop()
+        # Create root window and start the GUI application
+        root = tk.Tk()
+        app = RepoComparisonTool(root)
+        root.protocol("WM_DELETE_WINDOW", lambda: (app.cleanup(), root.destroy()))
+        root.mainloop()
         
     except Exception as e:
         logger.error(f"Application error: {e}", exc_info=True)
