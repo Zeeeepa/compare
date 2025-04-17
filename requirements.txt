@@ -1,6 +1,4 @@
+gitpython>=3.1.0
 tkinter
-ttkthemes
-pillow
-gitpython
-PyGithub
-requests
+PyGithub>=1.55
+ttkthemes>=3.2.0
