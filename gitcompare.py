@@ -155,7 +155,7 @@ class GitHubCompare:
         
         # Bind mousewheel scrolling
         self.commits_canvas.bind_all("<MouseWheel>", lambda event: self.commits_canvas.yview_scroll(int(-1*(event.delta/120)), "units"))
-        
+    
     def on_canvas_configure(self, event):
         # Update the width of the canvas window when the canvas size changes
         self.commits_canvas.itemconfig(self.commits_canvas_window, width=event.width)
@@ -628,7 +628,7 @@ class GitHubCompare:
         
         # Clear comparison results
         self.clear_comparison_results()
-        
+
     def clear_comparison_results(self):
         """Clear comparison results in both tabs"""
         # Clear local tab results
@@ -923,46 +923,72 @@ class GitHubCompare:
             return
             
         def perform_merge():
+            temp_branch = None
             try:
-                # Apply the cherry-pick via API
+                # Get branch names
                 base_branch = self.origin_base_branch_var.get()
                 
-                # Create a temporary branch from the base
+                # Create a temporary branch name
                 temp_branch = f"temp-merge-{commit.sha[:7]}"
+                
+                # Get base branch ref
                 base_ref = self.current_fork.get_git_ref(f"heads/{base_branch}")
+                
+                # Create temporary branch
                 self.current_fork.create_git_ref(f"refs/heads/{temp_branch}", base_ref.object.sha)
                 
-                # Cherry-pick the commit to the temp branch
-                # This isn't directly supported by PyGithub, so we'll do a manual cherry-pick
-                # by creating a commit with the same changes
-                cherry_pick = self.current_fork.merge(
-                    temp_branch,
-                    commit.sha,
-                    f"Cherry-pick: {commit.commit.message}"
-                )
-                
-                # Merge temp branch back to base
-                merge_result = self.current_fork.merge(
-                    base_branch,
-                    temp_branch,
-                    f"Merge commit {commit.sha[:7]} from parent"
-                )
-                
-                # Delete the temporary branch
-                self.current_fork.get_git_ref(f"heads/{temp_branch}").delete()
-                
-                # Update UI in main thread
-                self.root.after(0, lambda: self.after_merge())
-                
-                return merge_result
+                try:
+                    # Merge the commit directly to base branch
+                    merge_result = self.current_fork.merge(
+                        base_branch,
+                        commit.sha,
+                        f"Merge commit {commit.sha[:7]} from parent"
+                    )
+                    
+                    # Update UI in main thread
+                    self.root.after(0, lambda: self.after_merge())
+                    
+                    return merge_result
+                    
+                finally:
+                    # Always clean up temp branch if it was created
+                    if temp_branch:
+                        try:
+                            self.current_fork.get_git_ref(f"heads/{temp_branch}").delete()
+                        except:
+                            # Log but don't fail if cleanup fails
+                            print(f"Warning: Failed to delete temporary branch {temp_branch}")
                 
             except Exception as e:
-                raise Exception(f"Failed to merge commit: {str(e)}")
+                error_msg = f"Failed to merge commit: {str(e)}"
+                # Ensure cleanup happens even on error
+                if temp_branch:
+                    try:
+                        self.current_fork.get_git_ref(f"heads/{temp_branch}").delete()
+                    except:
+                        pass
+                raise Exception(error_msg)
         
-        # Run in background thread
-        self.run_in_thread(perform_merge, 
-                         message=f"Merging commit {commit.sha[:7]}...", 
-                         success_message=f"Commit {commit.sha[:7]} merged successfully")
+        # Run in background thread with status updates
+        self.status_var.set(f"Merging commit {commit.sha[:7]}...")
+        self.progress.pack(fill=tk.X, padx=5, pady=5)
+        self.progress.start()
+        
+        try:
+            # Run merge operation in background
+            thread = threading.Thread(target=lambda: self.run_in_thread(
+                perform_merge,
+                message=f"Merging commit {commit.sha[:7]}...",
+                success_message=f"Commit {commit.sha[:7]} merged successfully"
+            ))
+            thread.daemon = True
+            thread.start()
+        except Exception as e:
+            # Handle any thread startup errors
+            self.status_var.set("Ready")
+            self.progress.stop()
+            self.progress.pack_forget()
+            messagebox.showerror("Error", str(e))
 
     def after_merge(self):
         """Update display after merging a commit"""
